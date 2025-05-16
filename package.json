@@ -14,9 +14,13 @@
   "dependencies": {
     "@slack/bolt": "^4.2.0",
     "dotenv": "^16.4.7",
-    "jimp": "^0.22.10",
     "fs": "^0.0.1-security",
     "https": "^1.0.0",
-    "path": "^0.12.7"
+    "jimp": "^0.22.10",
+    "path": "^0.12.7",
+    "piexifjs": "^1.0.6",
+    "png-chunk-text": "^1.0.0",
+    "png-chunks-encode": "^1.0.0",
+    "png-chunks-extract": "^1.0.0"
   }
-} 
+}

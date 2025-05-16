@@ -1,5 +1,10 @@
 const Jimp = require('jimp');
 const path = require('path');
+const fs = require('fs');
+const piexif = require('piexifjs');
+const extractChunks = require('png-chunks-extract');
+const encodeChunks = require('png-chunks-encode');
+const textChunk = require('png-chunk-text');
 
 function generateRandomMetadata() {
     // More varied date ranges
@@ -64,8 +69,101 @@ function generateRandomMetadata() {
         software: randomSoftware,
         resolution: randomResolution,
         location: randomLocation,
-        gps: `${randomLat}, ${randomLong}`
+        gps: `${randomLat}, ${randomLong}`,
+        lat: parseFloat(randomLat),
+        long: parseFloat(randomLong)
     };
+}
+
+// Helper function to add EXIF metadata to JPEG image
+function addExifMetadata(jpegImagePath, metadata) {
+    try {
+        // Read the JPEG image as binary data
+        const jpegData = fs.readFileSync(jpegImagePath);
+        const jpegDataUri = "data:image/jpeg;base64," + jpegData.toString('base64');
+        
+        // Create EXIF data structure
+        const exifObj = {
+            "0th": {
+                [piexif.ImageIFD.Make]: metadata.device_model.split(' ')[0],
+                [piexif.ImageIFD.Model]: metadata.device_model,
+                [piexif.ImageIFD.Software]: metadata.software,
+                [piexif.ImageIFD.DateTime]: metadata.creation_time
+            },
+            "Exif": {
+                [piexif.ExifIFD.DateTimeOriginal]: metadata.creation_time,
+                [piexif.ExifIFD.DateTimeDigitized]: metadata.creation_time,
+                [piexif.ExifIFD.UserComment]: `Location: ${metadata.location}`
+            },
+            "GPS": {}
+        };
+        
+        // Add GPS information if available
+        if (metadata.lat && metadata.long) {
+            // Convert decimal coordinates to GPS format
+            const lat = Math.abs(metadata.lat);
+            const latRef = metadata.lat >= 0 ? "N" : "S";
+            const latDeg = Math.floor(lat);
+            const latMin = Math.floor((lat - latDeg) * 60);
+            const latSec = ((lat - latDeg) * 60 - latMin) * 60;
+            
+            const long = Math.abs(metadata.long);
+            const longRef = metadata.long >= 0 ? "E" : "W";
+            const longDeg = Math.floor(long);
+            const longMin = Math.floor((long - longDeg) * 60);
+            const longSec = ((long - longDeg) * 60 - longMin) * 60;
+            
+            exifObj.GPS[piexif.GPSIFD.GPSLatitudeRef] = latRef;
+            exifObj.GPS[piexif.GPSIFD.GPSLatitude] = [[latDeg, 1], [latMin, 1], [Math.round(latSec * 100), 100]];
+            exifObj.GPS[piexif.GPSIFD.GPSLongitudeRef] = longRef;
+            exifObj.GPS[piexif.GPSIFD.GPSLongitude] = [[longDeg, 1], [longMin, 1], [Math.round(longSec * 100), 100]];
+        }
+        
+        // Insert EXIF data into JPEG image
+        const exifBytes = piexif.dump(exifObj);
+        const newJpegData = piexif.insert(exifBytes, jpegDataUri);
+        
+        // Convert Data URI to Buffer and save
+        const newJpegBinary = Buffer.from(newJpegData.split(",")[1], 'base64');
+        fs.writeFileSync(jpegImagePath, newJpegBinary);
+        
+        console.log(`EXIF metadata added to ${jpegImagePath}`);
+        return true;
+    } catch (error) {
+        console.error('Error adding EXIF metadata:', error);
+        return false;
+    }
+}
+
+// Helper function to add metadata to PNG image
+function addPngMetadata(pngImagePath, metadata) {
+    try {
+        // Read the PNG file as binary data
+        const pngBuffer = fs.readFileSync(pngImagePath);
+        
+        // Extract chunks from PNG
+        const chunks = extractChunks(pngBuffer);
+        
+        // Add metadata as tEXt chunks
+        chunks.splice(-1, 0, textChunk.encode('Software', metadata.software));
+        chunks.splice(-1, 0, textChunk.encode('Creation Time', metadata.creation_time));
+        chunks.splice(-1, 0, textChunk.encode('Device Model', metadata.device_model));
+        chunks.splice(-1, 0, textChunk.encode('Location', metadata.location));
+        chunks.splice(-1, 0, textChunk.encode('GPS', metadata.gps));
+        chunks.splice(-1, 0, textChunk.encode('Resolution', metadata.resolution));
+        
+        // Encode chunks back to PNG buffer
+        const newPngBuffer = Buffer.from(encodeChunks(chunks));
+        
+        // Write the modified PNG file
+        fs.writeFileSync(pngImagePath, newPngBuffer);
+        
+        console.log(`PNG metadata added to ${pngImagePath}`);
+        return true;
+    } catch (error) {
+        console.error('Error adding PNG metadata:', error);
+        return false;
+    }
 }
 
 async function processImage(inputPath, outputPath, saturation, brightness, contrast) {
@@ -124,11 +222,9 @@ async function processImage(inputPath, outputPath, saturation, brightness, contr
                 }
             }
             
-            // Add a subtle watermark-like pattern (almost invisible)
+            // Generate random metadata
             const metadata = generateRandomMetadata();
             const watermarkText = `${metadata.device_model} ${metadata.date}`;
-            // We're not actually adding this as text since Jimp text is complex
-            // Instead, we'll add a pattern of pixels in the corner
             
             // Create a pattern of pixels in bottom right (very subtle)
             for (let i = 0; i < watermarkText.length; i++) {
@@ -148,8 +244,15 @@ async function processImage(inputPath, outputPath, saturation, brightness, contr
             await image.writeAsync(outputPath);
             console.log(`Image saved to ${outputPath}`);
             
-            // Add metadata to the EXIF data if possible (not all formats support this)
-            // Jimp has limited EXIF support, so this is simplified
+            // Add metadata based on file type
+            const fileExt = path.extname(outputPath).toLowerCase();
+            if (fileExt === '.jpg' || fileExt === '.jpeg') {
+                addExifMetadata(outputPath, metadata);
+            } else if (fileExt === '.png') {
+                addPngMetadata(outputPath, metadata);
+            } else {
+                console.log(`Metadata not added: ${fileExt} format doesn't support our metadata methods`);
+            }
             
             // Resolve with the output path
             resolve(outputPath);
